@@ -1,0 +1,17 @@
+{
+    "transparency": 0.95,
+    "bg_opacity": 1.0,
+    "blur_type": "Standard",
+    "proxy_enabled": false,
+    "proxy_http": "",
+    "proxy_https": "",
+    "timeout": 15,
+    "max_results": 20,
+    "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "delay_between_requests": 2,
+    "smsc_login": "",
+    "smsc_password": "",
+    "numverify_api_key": "",
+    "telegram_api_id": "",
+    "telegram_api_hash": ""
+}
