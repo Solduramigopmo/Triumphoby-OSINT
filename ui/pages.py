@@ -878,7 +878,7 @@ class NameSearchPage(BasePage):
         ).pack(anchor="w")
         ctk.CTkLabel(
             header,
-            text="Check username availability across 500+ services",
+            text="Check username across services and collect public profile metadata",
             font=("Segoe UI", 11),
             text_color=COLORS['text_dim']
         ).pack(anchor="w", pady=(3, 0))
@@ -910,6 +910,17 @@ class NameSearchPage(BasePage):
             placeholder_text='username'
         )
         self.username_entry.pack(fill="x", pady=(0, 15))
+        self.enhanced_osint_var = ctk.BooleanVar(value=True)
+        ctk.CTkCheckBox(
+            search_inner,
+            text="Extended OSINT mode (public metadata only)",
+            variable=self.enhanced_osint_var,
+            font=("Segoe UI", 10),
+            text_color=COLORS['text'],
+            fg_color=COLORS['accent'],
+            hover_color=COLORS['accent_hover'],
+            border_color=COLORS['border']
+        ).pack(anchor="w", pady=(0, 12))
         actions_frame = ctk.CTkFrame(search_inner, fg_color="transparent")
         actions_frame.pack(fill="x")
         GlowButton(
@@ -997,10 +1008,14 @@ class NameSearchPage(BasePage):
         username = self.username_entry.get().strip()
         if not username:
             return
+        self.collect_profile_mode = bool(self.enhanced_osint_var.get())
         self.searching = True
         self.stop_btn.configure(state="normal")
         self.clear_results()
-        self.update_status("Searching...", 0.1)
+        if self.collect_profile_mode:
+            self.update_status("Searching + collecting profile metadata...", 0.1)
+        else:
+            self.update_status("Searching...", 0.1)
         thread = threading.Thread(target=self._search_thread, args=(username,))
         thread.daemon = True
         thread.start()
@@ -1008,16 +1023,32 @@ class NameSearchPage(BasePage):
         try:
             from core.username_checker import UsernameChecker
             checker = UsernameChecker()
+            collect_profile = bool(getattr(self, "collect_profile_mode", False))
             def progress_callback(index, total, result):
                 progress = (index + 1) / total
                 self.app.root.after(0, lambda p=progress, n=result['name']:
                     self.update_status(f"Checking {n}...", p))
-                self.app.root.after(0, lambda idx=index, r=result:
-                    self.add_result_card(idx, r['name'], r['url'], r['found']))
+                result_copy = dict(result)
+                if isinstance(result.get("profile"), dict):
+                    result_copy["profile"] = dict(result["profile"])
+                self.app.root.after(0, lambda idx=index, r=result_copy:
+                    self.add_result_card(idx, r))
             def should_stop():
                 return not self.searching
-            checker.check_all(username, callback=progress_callback, stop_flag=should_stop)
-            self.app.root.after(0, lambda: self.update_status("Search completed", 1.0))
+            results = checker.check_all(
+                username,
+                callback=progress_callback,
+                stop_flag=should_stop,
+                collect_profile=collect_profile
+            )
+            found_total = sum(1 for item in results if item.get("found"))
+            enriched_total = sum(1 for item in results if item.get("profile"))
+            total_checked = len(results)
+            if collect_profile:
+                status_text = f"Completed: found {found_total}/{total_checked}, enriched {enriched_total}"
+            else:
+                status_text = f"Completed: found {found_total}/{total_checked}"
+            self.app.root.after(0, lambda txt=status_text: self.update_status(txt, 1.0))
         except Exception as e:
             print(f"[ERROR] Name search failed: {e}")
             import traceback
@@ -1026,9 +1057,45 @@ class NameSearchPage(BasePage):
         finally:
             self.searching = False
             self.app.root.after(0, lambda: self.stop_btn.configure(state="disabled"))
-    def add_result_card(self, index, service_name, url, found):
+    def _truncate_text(self, value, limit=160):
+        if not value:
+            return ""
+        text = str(value).replace("\n", " ").replace("\r", " ").strip()
+        text = " ".join(text.split())
+        if len(text) <= limit:
+            return text
+        return text[:limit - 3] + "..."
+    def _profile_preview_lines(self, profile):
+        lines = []
+        display_name = self._truncate_text(profile.get("display_name"), 120)
+        bio = self._truncate_text(profile.get("bio"), 220)
+        title = self._truncate_text(profile.get("title"), 120)
+        location = self._truncate_text(profile.get("location_hint"), 80)
+        canonical = self._truncate_text(profile.get("canonical"), 120)
+        same_as_count = profile.get("same_as_count")
+        if display_name:
+            lines.append(f"Name: {display_name}")
+        if bio:
+            lines.append(f"Bio: {bio}")
+        if title:
+            lines.append(f"Title: {title}")
+        if location:
+            lines.append(f"Location: {location}")
+        if canonical:
+            lines.append(f"Canonical: {canonical}")
+        if same_as_count:
+            lines.append(f"Linked profiles in JSON-LD: {same_as_count}")
+        return lines[:4]
+    def add_result_card(self, index, result):
+        service_name = result.get("name", "Unknown")
+        url = result.get("url", "")
+        found = bool(result.get("found"))
+        profile = result.get("profile") if isinstance(result.get("profile"), dict) else {}
         bg_color = COLORS['bg'] if index % 2 == 0 else COLORS['surface_solid']
-        if found:
+        if result.get("error"):
+            status_text = "[?]"
+            status_color = COLORS['warning']
+        elif found:
             status_text = "[+]"
             status_color = COLORS['success']
         else:
@@ -1037,15 +1104,15 @@ class NameSearchPage(BasePage):
         card = ctk.CTkFrame(
             self.results_container,
             fg_color=bg_color,
-            corner_radius=5,
-            height=32
+            corner_radius=5
         )
         card.pack(fill="x", padx=5, pady=1)
-        card.pack_propagate(False)
         content = ctk.CTkFrame(card, fg_color="transparent")
-        content.pack(fill="both", expand=True, padx=10, pady=5)
+        content.pack(fill="both", expand=True, padx=10, pady=7)
+        top_row = ctk.CTkFrame(content, fg_color="transparent")
+        top_row.pack(fill="x")
         status_label = ctk.CTkLabel(
-            content,
+            top_row,
             text=status_text,
             font=("Segoe UI", 10, "bold"),
             text_color=status_color,
@@ -1053,7 +1120,7 @@ class NameSearchPage(BasePage):
         )
         status_label.pack(side="left", padx=(0, 8))
         name_label = ctk.CTkLabel(
-            content,
+            top_row,
             text=service_name,
             font=("Segoe UI", 10),
             text_color=COLORS['text'],
@@ -1063,8 +1130,8 @@ class NameSearchPage(BasePage):
         name_label.pack(side="left", padx=(0, 8))
         if found:
             link_button = ctk.CTkButton(
-                content,
-                text=url,
+                top_row,
+                text=self._truncate_text(url, 100),
                 command=lambda u=url: self.open_url(u),
                 font=("Segoe UI", 9),
                 fg_color="transparent",
@@ -1078,13 +1145,26 @@ class NameSearchPage(BasePage):
             link_button.pack(side="left", fill="x", expand=True)
         else:
             url_label = ctk.CTkLabel(
-                content,
-                text=url,
+                top_row,
+                text=self._truncate_text(url, 120),
                 font=("Segoe UI", 9),
                 text_color=COLORS['text_darker'],
                 anchor="w"
             )
             url_label.pack(side="left", fill="x", expand=True)
+        if found and profile:
+            details = ctk.CTkFrame(content, fg_color="transparent")
+            details.pack(fill="x", pady=(5, 0))
+            for line in self._profile_preview_lines(profile):
+                ctk.CTkLabel(
+                    details,
+                    text=line,
+                    font=("Segoe UI", 9),
+                    text_color=COLORS['text_dim'],
+                    anchor="w",
+                    justify="left",
+                    wraplength=830
+                ).pack(fill="x", pady=(0, 1))
         self.result_cards.append(card)
     def open_url(self, url):
         import webbrowser
