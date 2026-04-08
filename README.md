@@ -94,7 +94,7 @@ triumphoby/
 ### 1) Клонируйте репозиторий
 
 ```bash
-git clone <ваш-url-репозитория>
+git clone https://github.com/Solduramigopmo/Triumphoby-OSINT
 cd triumphoby
 ```
 
